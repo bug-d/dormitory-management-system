@@ -26,8 +26,10 @@ mybatis-plus:
     map-underscore-to-camel-case: true
 
 jwt:
-  secret: ${JWT_SECRET}
-  expiration: ${JWT_EXPIRATION:86400000}
+  secret: dormitory-system-secret-key-2024
+  expiration: 86400000
+  header: Authorization
+  prefix: Bearer
 
 knife4j:
   enable: true
