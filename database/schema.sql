@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS dorm_assignments (
     FOREIGN KEY (auditor_id) REFERENCES users(id) ON DELETE SET NULL,
     INDEX idx_student (student_id),
     INDEX idx_dorm (dorm_id),
+    INDEX idx_active_bed (dorm_id, bed_no, status),
     INDEX idx_status (status),
     INDEX idx_type (type),
     INDEX idx_semester (semester)

@@ -112,6 +112,14 @@ public interface AssignmentMapper extends BaseMapper<DormAssignment> {
     boolean hasPendingAssignment(@Param("studentId") Long studentId);
 
     /**
+     * 锁定并查询指定宿舍床位上的有效入住记录。
+     * 审核时使用，防止并发批准两个申请到同一床位。
+     */
+    @Select("SELECT id FROM dorm_assignments WHERE dorm_id = #{dormId} AND bed_no = #{bedNo} AND status = 'active' LIMIT 1 FOR UPDATE")
+    Long selectActiveAssignmentIdByBedForUpdate(@Param("dormId") Long dormId,
+                                                 @Param("bedNo") String bedNo);
+
+    /**
      * 更新状态为已入住（审核通过）
      *
      * @param assignmentId 申请ID

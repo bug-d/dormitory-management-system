@@ -20,3 +20,11 @@ frontend/.env.*.local
 .env.*
 !.env.example
 
+# Local Codex workspace memory
+/PROJECT.md
+/REQUIREMENTS.md
+/TECH_STACK.md
+/DEV_LOG.md
+/PITFALLS.md
+/SOP.md
+/RETRO.md

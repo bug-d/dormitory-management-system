@@ -22,6 +22,14 @@ docs/       需求、接口和部署说明
 
 数据库可使用 `docker compose up -d` 创建，也可以手动创建 MySQL 8 数据库后依次执行 `database/schema.sql` 和 `database/data.sql`。
 
+从旧版本升级且曾使用过入住/调宿申请时，请备份数据库后执行：
+
+```powershell
+mysql -u root -p < database/migrations/2026-08-10-fix-assignment-occupancy.sql
+```
+
+该迁移会按有效入住记录重新校准宿舍人数，并补充床位审核索引。
+
 ### 后端
 
 ```powershell
@@ -63,4 +71,3 @@ npm.cmd run build
 - 数据库凭据和 JWT 密钥只通过环境变量注入。
 - `.env`、依赖目录和构建产物已被 `.gitignore` 排除。
 - `database/data.sql` 仅用于本地演示，生产环境应删除或替换演示账号。
-

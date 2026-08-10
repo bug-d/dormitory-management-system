@@ -70,13 +70,7 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("性别不匹配，不能选择该宿舍");
         }
 
-        // 4. 增加宿舍占用数（乐观锁）
-        boolean success = incrementOccupiedWithLock(request.getDormId());
-        if (!success) {
-            throw new BusinessException("床位已被抢，请重新选择");
-        }
-
-        // 5. 创建申请记录
+        // 4. 创建申请记录。待审核申请不占用床位，只有审核通过后才更新入住人数。
         DormAssignment assignment = new DormAssignment();
         assignment.setStudentId(studentId);
         assignment.setDormId(request.getDormId());
@@ -122,13 +116,7 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("性别不匹配");
         }
 
-        // 4. 增加目标宿舍占用数
-        boolean success = incrementOccupiedWithLock(request.getDormId());
-        if (!success) {
-            throw new BusinessException("目标宿舍床位已被抢，请重新选择");
-        }
-
-        // 5. 创建换宿舍申请
+        // 4. 创建换宿舍申请。审核前保留原入住关系，不占用目标宿舍床位。
         DormAssignment assignment = new DormAssignment();
         assignment.setStudentId(studentId);
         assignment.setDormId(request.getDormId());
@@ -159,12 +147,7 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("只有待审核的申请可以撤销");
         }
 
-        // 释放床位
-        dormitoryMapper.decrementOccupied(assignment.getDormId(),
-            dormitoryMapper.selectById(assignment.getDormId()).getVersion());
-        dormitoryMapper.autoUpdateStatus(assignment.getDormId());
-
-        // 更新状态
+        // 待审核申请未占用床位，撤销时只更新申请状态。
         assignment.setStatus(StatusConstant.ASSIGNMENT_CANCELED);
         assignmentMapper.updateById(assignment);
         log.info("学生 {} 撤销申请 {}", studentId, assignmentId);
@@ -194,6 +177,13 @@ public class AssignmentServiceImpl implements AssignmentService {
     }
 
     private void approveAssignment(DormAssignment assignment, Long auditorId, String remark) {
+        // 锁定并检查具体床位，避免两个待审核申请被批准到同一床位。
+        Long activeAssignmentId = assignmentMapper.selectActiveAssignmentIdByBedForUpdate(
+            assignment.getDormId(), assignment.getBedNo());
+        if (activeAssignmentId != null) {
+            throw new BusinessException("该床位已被占用，无法通过");
+        }
+
         // 再次检查宿舍是否可用
         Dormitory dorm = dormitoryMapper.selectById(assignment.getDormId());
         if (dorm == null || dorm.isFull()) {
@@ -237,11 +227,7 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("驳回失败，该申请可能已被处理");
         }
 
-        // 释放床位
-        dormitoryMapper.decrementOccupied(assignment.getDormId(),
-            dormitoryMapper.selectById(assignment.getDormId()).getVersion());
-        dormitoryMapper.autoUpdateStatus(assignment.getDormId());
-
+        // 待审核申请未占用床位，驳回时无需修改宿舍入住人数。
         log.info("审核驳回申请 {}", assignment.getId());
     }
 
