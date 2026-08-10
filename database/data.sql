@@ -40,7 +40,16 @@ INSERT INTO dormitories (building_no, floor_no, room_no, gender, capacity, occup
 ('2栋', 2, '202', 'F', 4, 0, 'available');
 
 -- ============================================================
--- 4. 系统配置
+-- 4. 宿舍管理员权限
+-- ============================================================
+INSERT INTO manager_permissions (manager_id, dorm_id, permission_type) VALUES
+(2, 1, 'full'),
+(2, 2, 'full'),
+(2, 3, 'full'),
+(2, 4, 'full');
+
+-- ============================================================
+-- 5. 系统配置
 -- ============================================================
 INSERT INTO sys_config (config_key, config_value, description) VALUES
 ('semester', '2026-2027-1', '当前学期'),
@@ -50,7 +59,7 @@ INSERT INTO sys_config (config_key, config_value, description) VALUES
 ('init_password', '123456', '初始密码');
 
 -- ============================================================
--- 5. 查看数据
+-- 6. 查看数据
 -- ============================================================
 SELECT '========== 用户数据 ==========' AS '';
 SELECT id, username, real_name, role, status FROM users;
