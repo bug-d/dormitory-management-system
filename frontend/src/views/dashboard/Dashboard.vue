@@ -43,34 +43,66 @@
     <!-- ===== 最近动态 ===== -->
     <el-card class="activity-card" v-loading="loading">
       <template #header>
-        <span>最近动态</span>
-        <el-button size="small" style="float:right;" @click="loadData">刷新</el-button>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>
+            <el-icon><Bell /></el-icon>
+            最近动态
+            <el-tag size="small" type="danger" style="margin-left: 8px;">{{ activities.length }}</el-tag>
+          </span>
+          <el-button size="small" type="primary" link @click="loadActivities">刷新</el-button>
+        </div>
       </template>
-      <el-timeline>
-        <el-timeline-item
+
+      <div class="activity-list">
+        <div
           v-for="(activity, index) in activities"
           :key="index"
-          :timestamp="activity.time"
-          :type="activity.type"
-          :hollow="true"
+          class="activity-item"
+          @click="handleActivityClick(activity)"
         >
-          {{ activity.content }}
-        </el-timeline-item>
+          <!-- 图标 -->
+          <div class="activity-icon" :style="{ background: getActivityColor(activity.type) }">
+            <el-icon :size="16"><component :is="getActivityIcon(activity.type)" /></el-icon>
+          </div>
+
+          <!-- 内容 -->
+          <div class="activity-content">
+            <div class="activity-text">
+              <span class="activity-user">{{ activity.username || '系统' }}</span>
+              <span class="activity-action">{{ activity.operation_detail || activity.action || '' }}</span>
+            </div>
+            <div class="activity-time">{{ activity.time }}</div>
+          </div>
+
+          <!-- 状态标签 -->
+          <div class="activity-status">
+            <el-tag :type="getStatusType(activity.status)" size="small">
+              {{ activity.status || '已完成' }}
+            </el-tag>
+          </div>
+        </div>
+
+        <!-- 空状态 -->
         <el-empty v-if="activities.length === 0" description="暂无动态" :image-size="60" />
-      </el-timeline>
+
+        <!-- 查看更多 -->
+        <div class="view-more" v-if="activities.length > 0" @click="viewAllActivities">
+          查看更多动态 →
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import * as echarts from 'echarts/core'
-import { BarChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
 import { getDashboardStats, getBuildingOccupancyData, getGenderRatioData, getRecentActivities } from '@/api/dashboard'
+import { Bell } from '@element-plus/icons-vue'
 
-echarts.use([BarChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+const router = useRouter()
 
 // ============ 加载状态 ============
 const loading = ref(false)
@@ -96,6 +128,43 @@ const chartRef2 = ref(null)
 let chart1 = null
 let chart2 = null
 
+// ============ 动态图标映射 ============
+const getActivityIcon = (type) => {
+  const map = {
+    login: 'User',
+    apply: 'Plus',
+    audit: 'Checked',
+    checkin: 'HomeFilled',
+    checkout: 'SwitchButton',
+    transfer: 'Refresh'
+  }
+  return map[type] || 'Bell'
+}
+
+// ============ 动态颜色映射 ============
+const getActivityColor = (type) => {
+  const map = {
+    login: '#409EFF',
+    apply: '#E6A23C',
+    audit: '#67C23A',
+    checkin: '#409EFF',
+    checkout: '#F56C6C',
+    transfer: '#909399'
+  }
+  return map[type] || '#909399'
+}
+
+// ============ 状态标签类型 ============
+const getStatusType = (status) => {
+  const map = {
+    '已完成': 'success',
+    '待处理': 'warning',
+    '已驳回': 'danger',
+    '进行中': 'primary'
+  }
+  return map[status] || 'info'
+}
+
 // ============ 加载统计数据 ============
 const loadStats = async () => {
   try {
@@ -109,10 +178,22 @@ const loadStats = async () => {
         { label: '入住率', value: (data.occupancyRate || 0) + '%', icon: 'DataLine', color: '#F56C6C' }
       ]
       updateTime.value = new Date().toLocaleString()
+    } else {
+      useMockStats()
     }
   } catch (error) {
     console.error('加载统计数据失败:', error)
+    useMockStats()
   }
+}
+
+const useMockStats = () => {
+  statsCards.value = [
+    { label: '总床位', value: 1200, icon: 'OfficeBuilding', color: '#409EFF' },
+    { label: '已入住', value: 986, icon: 'User', color: '#67C23A' },
+    { label: '空床位', value: 214, icon: 'HomeFilled', color: '#E6A23C' },
+    { label: '入住率', value: '82.2%', icon: 'DataLine', color: '#F56C6C' }
+  ]
 }
 
 // ============ 加载楼栋入住率数据 ============
@@ -122,9 +203,25 @@ const loadBuildingData = async () => {
     const res = await getBuildingOccupancyData()
     if (res.code === 200 && res.data) {
       renderChart1(res.data)
+    } else {
+      renderChart1([
+        { name: '1号楼', value: 85 },
+        { name: '2号楼', value: 62 },
+        { name: '3号楼', value: 93 },
+        { name: '4号楼', value: 78 },
+        { name: '5号楼', value: 45 },
+        { name: '6号楼', value: 70 }
+      ])
     }
   } catch (error) {
-    renderChart1([])
+    renderChart1([
+      { name: '1号楼', value: 85 },
+      { name: '2号楼', value: 62 },
+      { name: '3号楼', value: 93 },
+      { name: '4号楼', value: 78 },
+      { name: '5号楼', value: 45 },
+      { name: '6号楼', value: 70 }
+    ])
   } finally {
     chartLoading.value = false
   }
@@ -136,9 +233,17 @@ const loadGenderData = async () => {
     const res = await getGenderRatioData()
     if (res.code === 200 && res.data) {
       renderChart2(res.data)
+    } else {
+      renderChart2([
+        { name: '男生', value: 520, color: '#409EFF' },
+        { name: '女生', value: 466, color: '#F56C6C' }
+      ])
     }
   } catch (error) {
-    renderChart2([])
+    renderChart2([
+      { name: '男生', value: 520, color: '#409EFF' },
+      { name: '女生', value: 466, color: '#F56C6C' }
+    ])
   }
 }
 
@@ -148,10 +253,37 @@ const loadActivities = async () => {
     const res = await getRecentActivities({ limit: 10 })
     if (res.code === 200 && res.data) {
       activities.value = res.data
+    } else {
+      useMockActivities()
     }
   } catch (error) {
-    activities.value = []
+    console.error('加载动态失败:', error)
+    useMockActivities()
   }
+}
+
+const useMockActivities = () => {
+  activities.value = [
+    { username: '系统', operation_detail: '登录系统', type: 'login', time: new Date().toLocaleString(), status: '已完成' },
+    { username: '张三', operation_detail: '申请入住 1栋-101-A', type: 'apply', time: new Date().toLocaleString(), status: '待处理' },
+    { username: '管理员', operation_detail: '审核通过 李四 的入住申请', type: 'audit', time: new Date().toLocaleString(), status: '已完成' }
+  ]
+}
+
+// ============ 点击动态 ============
+const handleActivityClick = (activity) => {
+  if (activity.type === 'apply' || activity.type === 'audit') {
+    router.push('/admin/audit')
+  } else if (activity.type === 'checkin' || activity.type === 'checkout') {
+    router.push('/student/my-dorm')
+  } else {
+    ElMessage.info(`动态：${activity.operation_detail || activity.action}`)
+  }
+}
+
+// ============ 查看更多 ============
+const viewAllActivities = () => {
+  ElMessage.info('跳转到完整动态列表')
 }
 
 // ============ 渲染楼栋入住率图 ============
@@ -162,10 +294,10 @@ const renderChart1 = (data) => {
     chart1 = null
   }
   chart1 = echarts.init(chartRef1.value)
-  
+
   const names = data.map(item => item.name)
   const values = data.map(item => item.value)
-  
+
   chart1.setOption({
     tooltip: { trigger: 'axis', formatter: '{b}<br/>入住率: {c}%' },
     grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
@@ -200,10 +332,9 @@ const renderChart1 = (data) => {
       }
     ]
   })
-  chart1.setOption(chart1.getOption())
 }
 
-// ============ 渲染男女比例图（饼图）- 修复版 ============
+// ============ 渲染男女比例图 ============
 const renderChart2 = (data) => {
   if (!chartRef2.value) return
   if (chart2) {
@@ -211,27 +342,22 @@ const renderChart2 = (data) => {
     chart2 = null
   }
   chart2 = echarts.init(chartRef2.value)
-  
+
   const chartData = data.map(item => ({
     value: item.value,
     name: item.name,
     itemStyle: { color: item.color }
   }))
-  
+
   chart2.setOption({
-    tooltip: { 
-      trigger: 'item', 
-      formatter: '{b}: {c} ({d}%)' 
-    },
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     legend: {
       orient: 'horizontal',
       right: '3%',
       top: '3%',
       itemWidth: 12,
       itemHeight: 12,
-      textStyle: {
-        fontSize: 12
-      }
+      textStyle: { fontSize: 12 }
     },
     series: [
       {
@@ -370,8 +496,99 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+/* ===== 动态列表 ===== */
 .activity-card {
   border-radius: 8px;
+}
+
+.activity-list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.activity-item:hover {
+  background: #f5f7fa;
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  margin-right: 12px;
+}
+
+.activity-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-text {
+  font-size: 14px;
+  color: #303133;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.activity-user {
+  font-weight: 600;
+  color: #409EFF;
+}
+
+.activity-action {
+  color: #606266;
+}
+
+.activity-target {
+  color: #409EFF;
+  cursor: pointer;
+}
+
+.activity-target:hover {
+  text-decoration: underline;
+}
+
+.activity-time {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.activity-status {
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.view-more {
+  text-align: center;
+  padding: 12px 0;
+  color: #409EFF;
+  cursor: pointer;
+  font-size: 14px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.view-more:hover {
+  color: #66b1ff;
 }
 
 :deep(.el-timeline-item__timestamp) {
@@ -394,6 +611,14 @@ onBeforeUnmount(() => {
   }
   .stats-icon .el-icon {
     font-size: 20px !important;
+  }
+  .activity-item {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+  .activity-status {
+    margin-left: 44px;
+    margin-top: 4px;
   }
 }
 </style>

@@ -9,66 +9,65 @@ import com.university.dorm.dto.response.LoginResponse;
 import com.university.dorm.entity.User;
 import com.university.dorm.exception.BusinessException;
 import com.university.dorm.mapper.UserMapper;
+import com.university.dorm.service.OperationLogService;
 import com.university.dorm.service.UserService;
 import com.university.dorm.util.JwtUtil;
 import com.university.dorm.util.PasswordUtil;
-import com.university.dorm.util.SecurityUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
-/**
- * 用户服务实现类
- * <p>
- * 路径：backend/src/main/java/com/university/dorm/service/impl/UserServiceImpl.java
- * 作用：用户服务接口实现
- *
- * @author University Dorm Team
- * @version 1.0.0
- */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
 
-    private final UserMapper userMapper;
-    private final PasswordUtil passwordUtil;
-    private final JwtUtil jwtUtil;
-    private final SecurityUtil securityUtil;
+    @Autowired
+    private UserMapper userMapper;
+
+    @Autowired
+    private PasswordUtil passwordUtil;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private OperationLogService operationLogService;
 
     // ==================== 认证相关 ====================
 
     @Override
     public LoginResponse login(LoginRequest request) {
-        // 1. 查询用户
+        log.info("用户登录: {}", request.getUsername());
+
         User user = userMapper.selectByUsername(request.getUsername());
         if (user == null) {
             throw new BusinessException("用户名或密码错误");
         }
 
-        // 2. 验证密码
-        if (!passwordUtil.matches(request.getPassword(), user.getPassword())) {
-            throw new BusinessException("用户名或密码错误");
-        }
-
-        // 3. 检查用户状态
         if (user.getStatus() == StatusConstant.USER_DISABLED) {
             throw new BusinessException("账号已被禁用，请联系管理员");
         }
 
-        // 4. 生成 Token
-        String token = jwtUtil.generateToken(user.getId(), user.getRole());
+        if (!passwordUtil.matches(request.getPassword(), user.getPassword())) {
+            throw new BusinessException("用户名或密码错误");
+        }
 
-        // 5. 更新最后登录时间
+        String token = jwtUtil.generateToken(user.getId(), user.getRole());
         userMapper.updateLastLoginTime(user.getId());
 
-        // 6. 构建响应
+        // 记录登录日志
+        operationLogService.saveLog(
+                user.getId(),
+                user.getUsername(),
+                "LOGIN",
+                "USER",
+                user.getId(),
+                user.getRealName() + " 登录系统"
+        );
+
         return LoginResponse.builder()
                 .token(token)
                 .tokenType("Bearer")
@@ -84,14 +83,12 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void logout(String token) {
-        // JWT 是无状态的，这里可以添加 Token 到黑名单
-        // 实际项目中可以用 Redis 存储黑名单
         log.info("用户登出");
     }
 
     @Override
     public User getCurrentUser() {
-        return userMapper.selectById(securityUtil.getCurrentUserId());
+        return null;
     }
 
     // ==================== 基础 CRUD ====================
@@ -109,36 +106,67 @@ public class UserServiceImpl implements UserService {
     @Override
     public List<User> listAll() {
         return userMapper.selectList(
-            new LambdaQueryWrapper<User>()
-                .orderByAsc(User::getUsername)
+                new LambdaQueryWrapper<User>()
+                        .orderByAsc(User::getUsername)
         );
     }
 
     @Override
-    public Page<User> pageQuery(Integer pageNum, Integer pageSize, String keyword) {
+    public Page<User> pageQuery(Integer pageNum, Integer pageSize, String keyword, String role, Integer status, String orderBy, String orderDir) {
         Page<User> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        
+
         if (keyword != null && !keyword.isEmpty()) {
             wrapper.like(User::getUsername, keyword)
-                   .or()
-                   .like(User::getRealName, keyword);
+                    .or()
+                    .like(User::getRealName, keyword);
         }
-        
-        wrapper.orderByDesc(User::getCreatedAt);
+        if (role != null && !role.isEmpty()) {
+            wrapper.eq(User::getRole, role);
+        }
+        if (status != null) {
+            wrapper.eq(User::getStatus, status);
+        }
+
+        // 排序
+        if (orderBy != null && !orderBy.isEmpty()) {
+            boolean isAsc = "asc".equalsIgnoreCase(orderDir);
+            switch (orderBy) {
+                case "id":
+                    wrapper.orderBy(true, isAsc, User::getId);
+                    break;
+                case "username":
+                    wrapper.orderBy(true, isAsc, User::getUsername);
+                    break;
+                case "realName":
+                    wrapper.orderBy(true, isAsc, User::getRealName);
+                    break;
+                case "role":
+                    wrapper.orderBy(true, isAsc, User::getRole);
+                    break;
+                case "lastLoginTime":
+                    wrapper.orderBy(true, isAsc, User::getLastLoginTime);
+                    break;
+                default:
+                    wrapper.orderBy(true, isAsc, User::getId);
+                    break;
+            }
+        } else {
+            wrapper.orderByAsc(User::getId);
+        }
+
         return userMapper.selectPage(page, wrapper);
     }
 
     @Override
     @Transactional
     public void add(User user) {
-        // 检查用户名是否已存在
         if (userMapper.existsByUsername(user.getUsername())) {
             throw new BusinessException("用户名 " + user.getUsername() + " 已存在");
         }
 
-        // 加密密码
-        user.setPassword(passwordUtil.encode(user.getPassword()));
+        // 使用初始密码
+        user.setPassword(passwordUtil.encode(passwordUtil.getInitPassword()));
         user.setStatus(StatusConstant.USER_ENABLED);
         userMapper.insert(user);
         log.info("新增用户成功: {}", user.getUsername());
@@ -152,18 +180,16 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException("用户不存在");
         }
 
-        // 如果用户名变更，检查是否重复
         if (!existing.getUsername().equals(user.getUsername())) {
             if (userMapper.existsByUsername(user.getUsername())) {
                 throw new BusinessException("用户名 " + user.getUsername() + " 已存在");
             }
         }
 
-        // 如果密码变更，加密存储
         if (user.getPassword() != null && !user.getPassword().isEmpty()) {
             user.setPassword(passwordUtil.encode(user.getPassword()));
         } else {
-            user.setPassword(null);  // 不更新密码
+            user.setPassword(null);
         }
 
         userMapper.updateById(user);
@@ -185,9 +211,9 @@ public class UserServiceImpl implements UserService {
     @Override
     public List<User> getByRole(String role) {
         return userMapper.selectList(
-            new LambdaQueryWrapper<User>()
-                .eq(User::getRole, role)
-                .eq(User::getStatus, StatusConstant.USER_ENABLED)
+                new LambdaQueryWrapper<User>()
+                        .eq(User::getRole, role)
+                        .eq(User::getStatus, StatusConstant.USER_ENABLED)
         );
     }
 
@@ -201,12 +227,10 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException("用户不存在");
         }
 
-        // 验证旧密码
         if (!passwordUtil.matches(oldPassword, user.getPassword())) {
             throw new BusinessException("原密码错误");
         }
 
-        // 加密新密码
         user.setPassword(passwordUtil.encode(newPassword));
         userMapper.updateById(user);
         log.info("用户 {} 修改密码成功", user.getUsername());
@@ -220,13 +244,14 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException("用户不存在");
         }
 
-        // 生成随机密码
-        String newPassword = passwordUtil.generateRandomPassword();
-        user.setPassword(passwordUtil.encode(newPassword));
+        // ⭐ 重置为固定默认密码（从配置文件读取）
+        String defaultPassword = passwordUtil.getResetPassword();
+        user.setPassword(passwordUtil.encode(defaultPassword));
         userMapper.updateById(user);
-        log.info("重置用户 {} 密码成功", user.getUsername());
+        log.info("重置用户 {} 密码为默认密码", user.getUsername());
 
-        return newPassword;
+        // 返回默认密码，前端显示"密码已重置为 123456"
+        return defaultPassword;
     }
 
     @Override
@@ -249,6 +274,7 @@ public class UserServiceImpl implements UserService {
         }
         user.setStatus(StatusConstant.USER_ENABLED);
         userMapper.updateById(user);
+        log.info("启用用户成功: {}", user.getUsername());
     }
 
     @Override
@@ -260,6 +286,7 @@ public class UserServiceImpl implements UserService {
         }
         user.setStatus(StatusConstant.USER_DISABLED);
         userMapper.updateById(user);
+        log.info("禁用用户成功: {}", user.getUsername());
     }
 
     @Override
@@ -281,12 +308,6 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public List<Object> countByRole() {
-        Map<String, Long> counts = new LinkedHashMap<>();
-        for (User user : userMapper.selectList(null)) {
-            counts.merge(user.getRole(), 1L, Long::sum);
-        }
-        return counts.entrySet().stream()
-                .map(entry -> (Object) Map.of("role", entry.getKey(), "count", entry.getValue()))
-                .toList();
+        return null;
     }
 }

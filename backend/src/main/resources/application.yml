@@ -6,6 +6,9 @@ server:
 spring:
   application:
     name: dormitory-backend
+  # ⭐ 添加这一行：激活开发环境
+  profiles:
+    active: dev
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL}
@@ -34,10 +37,16 @@ jwt:
 knife4j:
   enable: true
 
+# ⭐ 添加系统配置
+system:
+  init-password: 123456
+  reset-password: 123456
+  semester: 2026-2027-1
+  max-dorm-capacity: 6
+
 logging:
   level:
     com.university.dorm: info
     org.springframework.web: info
   pattern:
     console: '%d{yyyy-MM-dd HH:mm:ss} - %msg%n'
-

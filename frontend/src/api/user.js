@@ -9,13 +9,15 @@ import request from '@/utils/request'
 // ============ 基础 CRUD ============
 
 /**
- * 分页查询用户
+ * 分页查询用户（支持排序）
  * @param {Object} params
  * @param {number} params.pageNum - 页码
  * @param {number} params.pageSize - 每页大小
  * @param {string} params.keyword - 搜索关键字
  * @param {string} params.role - 角色筛选
  * @param {number} params.status - 状态筛选
+ * @param {string} params.orderBy - 排序字段（id/username/realName/role）
+ * @param {string} params.orderDir - 排序方向（asc/desc）
  * @returns {Promise}
  */
 export const getUsers = (params) => {
@@ -133,7 +135,7 @@ export const resetPassword = (id) => {
  */
 export const getAdmins = () => {
   return request({
-    url: '/admin/admins',
+    url: '/admin/users/admins',
     method: 'get'
   })
 }
@@ -144,7 +146,7 @@ export const getAdmins = () => {
  */
 export const getManagers = () => {
   return request({
-    url: '/admin/managers',
+    url: '/admin/users/managers',
     method: 'get'
   })
 }
@@ -157,7 +159,7 @@ export const getManagers = () => {
  */
 export const getUserCount = () => {
   return request({
-    url: '/admin/stats/count',
+    url: '/admin/users/stats/count',
     method: 'get'
   })
 }

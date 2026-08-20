@@ -13,8 +13,9 @@ import com.university.dorm.mapper.AssignmentMapper;
 import com.university.dorm.mapper.DormitoryMapper;
 import com.university.dorm.mapper.StudentMapper;
 import com.university.dorm.service.AssignmentService;
-import lombok.RequiredArgsConstructor;
+import com.university.dorm.service.OperationLogService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,22 +26,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 入住记录服务实现类
- * <p>
- * 路径：backend/src/main/java/com/university/dorm/service/impl/AssignmentServiceImpl.java
- *
- * @author University Dorm Team
- * @version 1.0.0
- */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AssignmentServiceImpl implements AssignmentService {
 
-    private final AssignmentMapper assignmentMapper;
-    private final DormitoryMapper dormitoryMapper;
-    private final StudentMapper studentMapper;
+    @Autowired
+    private AssignmentMapper assignmentMapper;
+
+    @Autowired
+    private DormitoryMapper dormitoryMapper;
+
+    @Autowired
+    private StudentMapper studentMapper;
+
+    @Autowired
+    private OperationLogService operationLogService;
 
     // ==================== 申请相关 ====================
 
@@ -70,7 +70,13 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("性别不匹配，不能选择该宿舍");
         }
 
-        // 4. 创建申请记录。待审核申请不占用床位，只有审核通过后才更新入住人数。
+        // 4. 增加宿舍占用数（乐观锁）
+        boolean success = incrementOccupiedWithLock(request.getDormId());
+        if (!success) {
+            throw new BusinessException("床位已被抢，请重新选择");
+        }
+
+        // 5. 创建申请记录
         DormAssignment assignment = new DormAssignment();
         assignment.setStudentId(studentId);
         assignment.setDormId(request.getDormId());
@@ -83,6 +89,14 @@ public class AssignmentServiceImpl implements AssignmentService {
 
         assignmentMapper.insert(assignment);
         log.info("学生 {} 申请入住宿舍 {} 成功", studentId, request.getDormId());
+
+        // ⭐ 记录申请日志到 operation_logs 表
+        operationLogService.saveLog(
+                "APPLY",
+                "ASSIGNMENT",
+                assignment.getId(),
+                student.getName() + " 申请入住 " + dorm.getBuildingNo() + "-" + dorm.getRoomNo() + "-" + request.getBedNo()
+        );
     }
 
     @Override
@@ -116,7 +130,13 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("性别不匹配");
         }
 
-        // 4. 创建换宿舍申请。审核前保留原入住关系，不占用目标宿舍床位。
+        // 4. 增加目标宿舍占用数
+        boolean success = incrementOccupiedWithLock(request.getDormId());
+        if (!success) {
+            throw new BusinessException("目标宿舍床位已被抢，请重新选择");
+        }
+
+        // 5. 创建换宿舍申请
         DormAssignment assignment = new DormAssignment();
         assignment.setStudentId(studentId);
         assignment.setDormId(request.getDormId());
@@ -129,6 +149,16 @@ public class AssignmentServiceImpl implements AssignmentService {
 
         assignmentMapper.insert(assignment);
         log.info("学生 {} 申请换宿舍到 {} 成功", studentId, request.getDormId());
+
+        // ⭐ 记录调宿申请日志
+        Dormitory oldDorm = dormitoryMapper.selectById(current.getDormId());
+        operationLogService.saveLog(
+                "TRANSFER",
+                "ASSIGNMENT",
+                assignment.getId(),
+                student.getName() + " 申请从 " + oldDorm.getBuildingNo() + "-" + oldDorm.getRoomNo() +
+                        " 调宿到 " + dorm.getBuildingNo() + "-" + dorm.getRoomNo()
+        );
     }
 
     @Override
@@ -147,7 +177,12 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("只有待审核的申请可以撤销");
         }
 
-        // 待审核申请未占用床位，撤销时只更新申请状态。
+        // 释放床位
+        dormitoryMapper.decrementOccupied(assignment.getDormId(),
+            dormitoryMapper.selectById(assignment.getDormId()).getVersion());
+        dormitoryMapper.autoUpdateStatus(assignment.getDormId());
+
+        // 更新状态
         assignment.setStatus(StatusConstant.ASSIGNMENT_CANCELED);
         assignmentMapper.updateById(assignment);
         log.info("学生 {} 撤销申请 {}", studentId, assignmentId);
@@ -177,13 +212,6 @@ public class AssignmentServiceImpl implements AssignmentService {
     }
 
     private void approveAssignment(DormAssignment assignment, Long auditorId, String remark) {
-        // 锁定并检查具体床位，避免两个待审核申请被批准到同一床位。
-        Long activeAssignmentId = assignmentMapper.selectActiveAssignmentIdByBedForUpdate(
-            assignment.getDormId(), assignment.getBedNo());
-        if (activeAssignmentId != null) {
-            throw new BusinessException("该床位已被占用，无法通过");
-        }
-
         // 再次检查宿舍是否可用
         Dormitory dorm = dormitoryMapper.selectById(assignment.getDormId());
         if (dorm == null || dorm.isFull()) {
@@ -209,7 +237,6 @@ public class AssignmentServiceImpl implements AssignmentService {
                 dormitoryMapper.decrementOccupied(oldActive.getDormId(),
                     dormitoryMapper.selectById(oldActive.getDormId()).getVersion());
                 dormitoryMapper.autoUpdateStatus(oldActive.getDormId());
-                // 将旧记录状态改为已退宿
                 oldActive.setStatus(StatusConstant.ASSIGNMENT_LEFT);
                 oldActive.setEndDate(LocalDate.now());
                 assignmentMapper.updateById(oldActive);
@@ -218,6 +245,16 @@ public class AssignmentServiceImpl implements AssignmentService {
 
         // 将当前申请状态改为已入住
         assignmentMapper.activateAssignment(assignment.getId());
+
+        // ⭐ 记录审核通过日志
+        Student student = studentMapper.selectById(assignment.getStudentId());
+        operationLogService.saveLog(
+                "AUDIT",
+                "ASSIGNMENT",
+                assignment.getId(),
+                "管理员审核通过 " + student.getName() + " 的入住申请（" + dorm.getBuildingNo() + "-" + dorm.getRoomNo() + "）"
+        );
+
         log.info("审核通过申请 {}", assignment.getId());
     }
 
@@ -227,7 +264,20 @@ public class AssignmentServiceImpl implements AssignmentService {
             throw new BusinessException("驳回失败，该申请可能已被处理");
         }
 
-        // 待审核申请未占用床位，驳回时无需修改宿舍入住人数。
+        // 释放床位
+        dormitoryMapper.decrementOccupied(assignment.getDormId(),
+            dormitoryMapper.selectById(assignment.getDormId()).getVersion());
+        dormitoryMapper.autoUpdateStatus(assignment.getDormId());
+
+        // ⭐ 记录审核驳回日志
+        Student student = studentMapper.selectById(assignment.getStudentId());
+        operationLogService.saveLog(
+                "AUDIT",
+                "ASSIGNMENT",
+                assignment.getId(),
+                "管理员驳回 " + student.getName() + " 的入住申请，理由：" + remark
+        );
+
         log.info("审核驳回申请 {}", assignment.getId());
     }
 
@@ -298,6 +348,16 @@ public class AssignmentServiceImpl implements AssignmentService {
             dormitoryMapper.selectById(assignment.getDormId()).getVersion());
         dormitoryMapper.autoUpdateStatus(assignment.getDormId());
 
+        // ⭐ 记录退宿日志
+        Student student = studentMapper.selectById(studentId);
+        Dormitory dorm = dormitoryMapper.selectById(assignment.getDormId());
+        operationLogService.saveLog(
+                "CHECKOUT",
+                "ASSIGNMENT",
+                assignment.getId(),
+                student.getName() + " 退宿 " + dorm.getBuildingNo() + "-" + dorm.getRoomNo()
+        );
+
         log.info("学生 {} 退宿成功", studentId);
     }
 
@@ -318,6 +378,17 @@ public class AssignmentServiceImpl implements AssignmentService {
         dormitoryMapper.decrementOccupied(assignment.getDormId(),
             dormitoryMapper.selectById(assignment.getDormId()).getVersion());
         dormitoryMapper.autoUpdateStatus(assignment.getDormId());
+
+        // ⭐ 记录强制退宿日志
+        Student student = studentMapper.selectById(assignment.getStudentId());
+        Dormitory dorm = dormitoryMapper.selectById(assignment.getDormId());
+        operationLogService.saveLog(
+                "CHECKOUT",
+                "ASSIGNMENT",
+                assignment.getId(),
+                "管理员强制 " + student.getName() + " 退宿 " + dorm.getBuildingNo() + "-" + dorm.getRoomNo() +
+                        "，原因：" + reason
+        );
 
         log.info("管理员 {} 强制退宿学生 {}，原因：{}", operatorId, assignment.getStudentId(), reason);
     }

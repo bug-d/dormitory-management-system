@@ -1,85 +1,138 @@
 package com.university.dorm.controller.common;
 
 import com.university.dorm.dto.response.Result;
-import com.university.dorm.entity.Dormitory;
-import com.university.dorm.entity.Student;
-import com.university.dorm.service.DormitoryService;
-import com.university.dorm.service.StudentService;
+import com.university.dorm.mapper.AssignmentMapper;
+import com.university.dorm.mapper.DormitoryMapper;
+import com.university.dorm.mapper.OperationLogMapper;
+import com.university.dorm.mapper.StudentMapper;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
+/**
+ * 首页仪表盘控制器
+ * <p>
+ * 路径：backend/src/main/java/com/university/dorm/controller/common/DashboardController.java
+ * 作用：提供首页统计数据接口
+ *
+ * @author University Dorm Team
+ * @version 1.0.0
+ */
+@Slf4j
 @RestController
 @RequestMapping("/dashboard")
 @RequiredArgsConstructor
+@Tag(name = "首页仪表盘", description = "首页统计数据接口")
 public class DashboardController {
 
-    private final DormitoryService dormitoryService;
-    private final StudentService studentService;
+    private final DormitoryMapper dormitoryMapper;
+    private final StudentMapper studentMapper;
+    private final AssignmentMapper assignmentMapper;
+    private final OperationLogMapper operationLogMapper;
 
+    /**
+     * 获取首页统计数据（统计卡片）
+     * 数据来源：dormitories + dorm_assignments
+     */
     @GetMapping("/stats")
+    @Operation(summary = "获取首页统计数据")
     public Result<Map<String, Object>> getStats() {
-        List<Dormitory> dorms = dormitoryService.listAll().stream()
-                .filter(item -> !"closed".equals(item.getStatus()))
-                .toList();
-        int totalBeds = dorms.stream().mapToInt(Dormitory::getCapacity).sum();
-        int occupiedBeds = dorms.stream().mapToInt(Dormitory::getOccupied).sum();
-        Map<String, Object> stats = new LinkedHashMap<>();
-        stats.put("totalBeds", totalBeds);
-        stats.put("occupiedBeds", occupiedBeds);
-        stats.put("emptyBeds", Math.max(totalBeds - occupiedBeds, 0));
-        stats.put("occupancyRate", totalBeds == 0 ? 0D : Math.round(occupiedBeds * 1000D / totalBeds) / 10D);
-        return Result.success(stats);
+        try {
+            Map<String, Object> stats = new HashMap<>();
+
+            // 总床位 = 宿舍数 × 4
+            Long totalBeds = dormitoryMapper.selectCount(null) * 4L;
+
+            // 已入住 = status='active' 的记录数
+            Long occupiedBeds = assignmentMapper.countAllActive();
+            if (occupiedBeds == null) occupiedBeds = 0L;
+
+            // 空床位
+            Long emptyBeds = totalBeds - occupiedBeds;
+
+            // 入住率
+            String occupancyRate = totalBeds > 0 ?
+                String.format("%.1f", (occupiedBeds * 100.0) / totalBeds) : "0";
+
+            stats.put("totalBeds", totalBeds);
+            stats.put("occupiedBeds", occupiedBeds);
+            stats.put("emptyBeds", emptyBeds > 0 ? emptyBeds : 0);
+            stats.put("occupancyRate", occupancyRate);
+
+            log.info("首页统计数据：总床位={}, 已入住={}, 空床位={}, 入住率={}%",
+                    totalBeds, occupiedBeds, emptyBeds, occupancyRate);
+
+            return Result.success(stats);
+        } catch (Exception e) {
+            log.error("获取统计数据失败", e);
+            return Result.error("获取统计数据失败");
+        }
     }
 
+    /**
+     * 获取各楼栋入住率数据（首页柱状图）
+     * 数据来源：dormitories 表按楼栋分组统计
+     */
     @GetMapping("/chart/building-occupancy")
-    public Result<List<Map<String, Object>>> getBuildingOccupancy(
-            @RequestParam(required = false) String gender) {
-        Map<String, List<Dormitory>> groups = dormitoryService.listAll().stream()
-                .filter(item -> gender == null || gender.isBlank() || gender.equals(item.getGender()))
-                .collect(Collectors.groupingBy(Dormitory::getBuildingNo, LinkedHashMap::new, Collectors.toList()));
-        List<Map<String, Object>> result = new ArrayList<>();
-        groups.forEach((building, dorms) -> {
-            int capacity = dorms.stream().mapToInt(Dormitory::getCapacity).sum();
-            int occupied = dorms.stream().mapToInt(Dormitory::getOccupied).sum();
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", building);
-            item.put("value", capacity == 0 ? 0D : Math.round(occupied * 1000D / capacity) / 10D);
-            result.add(item);
-        });
-        return Result.success(result);
+    @Operation(summary = "获取各楼栋入住率数据")
+    public Result<List<Map<String, Object>>> getBuildingOccupancy() {
+        try {
+            List<Map<String, Object>> result = dormitoryMapper.selectBuildingStatistics();
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("获取楼栋入住率数据失败", e);
+            return Result.error("获取数据失败");
+        }
     }
 
+    /**
+     * 获取男女比例数据（首页饼图）
+     * 数据来源：students 表按性别统计
+     */
     @GetMapping("/chart/gender-ratio")
+    @Operation(summary = "获取男女比例数据")
     public Result<List<Map<String, Object>>> getGenderRatio() {
-        List<Student> students = studentService.getActiveStudents();
-        long male = students.stream().filter(item -> "M".equals(item.getGender())).count();
-        long female = students.stream().filter(item -> "F".equals(item.getGender())).count();
-        List<Map<String, Object>> result = new ArrayList<>();
-        result.add(chartItem("男生", male, "#409EFF"));
-        result.add(chartItem("女生", female, "#F56C6C"));
-        return Result.success(result);
+        try {
+            Long maleCount = studentMapper.countByGender("M");
+            Long femaleCount = studentMapper.countByGender("F");
+
+            if (maleCount == null) maleCount = 0L;
+            if (femaleCount == null) femaleCount = 0L;
+
+            List<Map<String, Object>> result = List.of(
+                Map.of("name", "男生", "value", maleCount, "color", "#409EFF"),
+                Map.of("name", "女生", "value", femaleCount, "color", "#F56C6C")
+            );
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("获取男女比例数据失败", e);
+            return Result.error("获取数据失败");
+        }
     }
 
+    /**
+     * 获取最近动态（首页动态列表）
+     * 数据来源：operation_logs 表
+     */
     @GetMapping("/activities")
-    public Result<List<Map<String, Object>>> getActivities() {
-        return Result.success(List.of());
-    }
-
-    private Map<String, Object> chartItem(String name, long value, String color) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("name", name);
-        item.put("value", value);
-        item.put("color", color);
-        return item;
+    @Operation(summary = "获取最近动态")
+    public Result<List<Map<String, Object>>> getActivities(
+            @RequestParam(defaultValue = "10") int limit) {
+        try {
+            List<Map<String, Object>> activities = operationLogMapper.selectRecentActivities(limit);
+            return Result.success(activities);
+        } catch (Exception e) {
+            log.error("获取最近动态失败", e);
+            return Result.error("获取数据失败");
+        }
     }
 }
-

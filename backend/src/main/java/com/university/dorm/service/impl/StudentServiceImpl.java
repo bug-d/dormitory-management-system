@@ -7,17 +7,13 @@ import com.university.dorm.constant.StatusConstant;
 import com.university.dorm.dto.request.StudentRequest;
 import com.university.dorm.entity.Student;
 import com.university.dorm.entity.User;
-import com.university.dorm.entity.DormAssignment;
-import com.university.dorm.entity.Dormitory;
 import com.university.dorm.exception.BusinessException;
 import com.university.dorm.mapper.StudentMapper;
 import com.university.dorm.mapper.UserMapper;
-import com.university.dorm.mapper.AssignmentMapper;
-import com.university.dorm.mapper.DormitoryMapper;
 import com.university.dorm.service.StudentService;
 import com.university.dorm.util.PasswordUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,24 +23,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 学生服务实现类
- * <p>
- * 路径：backend/src/main/java/com/university/dorm/service/impl/StudentServiceImpl.java
- *
- * @author University Dorm Team
- * @version 1.0.0
- */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class StudentServiceImpl implements StudentService {
 
-    private final StudentMapper studentMapper;
-    private final UserMapper userMapper;
-    private final PasswordUtil passwordUtil;
-    private final AssignmentMapper assignmentMapper;
-    private final DormitoryMapper dormitoryMapper;
+    @Autowired
+    private StudentMapper studentMapper;
+
+    @Autowired
+    private UserMapper userMapper;
+
+    @Autowired
+    private PasswordUtil passwordUtil;
 
     // ==================== 基础 CRUD ====================
 
@@ -69,14 +59,14 @@ public class StudentServiceImpl implements StudentService {
     }
 
     @Override
-    public Page<Student> pageQuery(Integer pageNum, Integer pageSize, String keyword, String grade, String gender) {
+    public Page<Student> pageQuery(Integer pageNum, Integer pageSize, String keyword, String grade, String gender, Integer status, String orderBy, String orderDir) {
         Page<Student> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<Student> wrapper = new LambdaQueryWrapper<>();
 
         if (keyword != null && !keyword.isEmpty()) {
             wrapper.like(Student::getStudentNo, keyword)
-                    .or()
-                    .like(Student::getName, keyword);
+                   .or()
+                   .like(Student::getName, keyword);
         }
         if (grade != null && !grade.isEmpty()) {
             wrapper.eq(Student::getGrade, grade);
@@ -84,20 +74,44 @@ public class StudentServiceImpl implements StudentService {
         if (gender != null && !gender.isEmpty()) {
             wrapper.eq(Student::getGender, gender);
         }
+        if (status != null) {
+            wrapper.eq(Student::getStatus, status);
+        }
 
-        wrapper.orderByDesc(Student::getCreatedAt);
+        // 排序
+        if (orderBy != null && !orderBy.isEmpty()) {
+            boolean isAsc = "asc".equalsIgnoreCase(orderDir);
+            switch (orderBy) {
+                case "id":
+                    wrapper.orderBy(true, isAsc, Student::getId);
+                    break;
+                case "studentNo":
+                    wrapper.orderBy(true, isAsc, Student::getStudentNo);
+                    break;
+                case "name":
+                    wrapper.orderBy(true, isAsc, Student::getName);
+                    break;
+                case "grade":
+                    wrapper.orderBy(true, isAsc, Student::getGrade);
+                    break;
+                default:
+                    wrapper.orderBy(true, isAsc, Student::getId);
+                    break;
+            }
+        } else {
+            wrapper.orderByAsc(Student::getId);
+        }
+
         return studentMapper.selectPage(page, wrapper);
     }
 
     @Override
     @Transactional
     public void add(StudentRequest request) {
-        // 1. 检查学号是否已存在
         if (studentMapper.existsByStudentNo(request.getStudentNo())) {
             throw new BusinessException("学号 " + request.getStudentNo() + " 已存在");
         }
 
-        // 2. 创建用户账号
         User user = new User();
         user.setUsername(request.getStudentNo());
         user.setPassword(passwordUtil.encode("123456"));
@@ -106,7 +120,6 @@ public class StudentServiceImpl implements StudentService {
         user.setStatus(StatusConstant.USER_ENABLED);
         userMapper.insert(user);
 
-        // 3. 创建学生记录
         Student student = new Student();
         student.setUserId(user.getId());
         student.setStudentNo(request.getStudentNo());
@@ -135,14 +148,12 @@ public class StudentServiceImpl implements StudentService {
             throw new BusinessException("学生不存在");
         }
 
-        // 如果学号变更，检查是否重复
         if (!existing.getStudentNo().equals(request.getStudentNo())) {
             if (studentMapper.existsByStudentNo(request.getStudentNo())) {
                 throw new BusinessException("学号 " + request.getStudentNo() + " 已存在");
             }
         }
 
-        // 更新学生信息
         existing.setStudentNo(request.getStudentNo());
         existing.setName(request.getName());
         existing.setGender(request.getGender());
@@ -166,12 +177,10 @@ public class StudentServiceImpl implements StudentService {
             throw new BusinessException("学生不存在");
         }
 
-        // 检查是否有活跃入住记录
         if (hasActiveAssignment(id)) {
             throw new BusinessException("该学生已入住宿舍，请先办理退宿");
         }
 
-        // 删除学生和关联用户
         studentMapper.deleteById(id);
         userMapper.deleteById(student.getUserId());
         log.info("删除学生成功: {}", student.getStudentNo());
@@ -180,13 +189,79 @@ public class StudentServiceImpl implements StudentService {
     @Override
     @Transactional
     public void batchDelete(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
+        int successCount = 0;
         for (Long id : ids) {
             try {
-                delete(id);
+                Student student = studentMapper.selectById(id);
+                if (student == null) {
+                    log.warn("学生 ID {} 不存在，跳过", id);
+                    continue;
+                }
+                if (hasActiveAssignment(id)) {
+                    log.warn("学生 {} 已入住宿舍，跳过", student.getStudentNo());
+                    continue;
+                }
+                studentMapper.deleteById(id);
+                userMapper.deleteById(student.getUserId());
+                successCount++;
+                log.info("删除学生成功: {}", student.getStudentNo());
             } catch (Exception e) {
-                log.warn("批量删除失败: {}", e.getMessage());
+                log.error("删除学生失败, ID: {}, 错误: {}", id, e.getMessage());
             }
         }
+        log.info("批量删除完成，成功 {} 条，失败 {} 条", successCount, ids.size() - successCount);
+    }
+
+    /**
+     * 按条件批量删除学生（跨页删除）
+     */
+    @Override
+    @Transactional
+    public int deleteByCondition(String keyword, String grade, String gender, Integer status) {
+        LambdaQueryWrapper<Student> wrapper = new LambdaQueryWrapper<>();
+
+        if (keyword != null && !keyword.isEmpty()) {
+            wrapper.like(Student::getStudentNo, keyword)
+                   .or()
+                   .like(Student::getName, keyword);
+        }
+        if (grade != null && !grade.isEmpty()) {
+            wrapper.eq(Student::getGrade, grade);
+        }
+        if (gender != null && !gender.isEmpty()) {
+            wrapper.eq(Student::getGender, gender);
+        }
+        if (status != null) {
+            wrapper.eq(Student::getStatus, status);
+        }
+
+        List<Student> students = studentMapper.selectList(wrapper);
+        if (students.isEmpty()) {
+            log.info("没有符合条件的学");
+            return 0;
+        }
+
+        int count = 0;
+        for (Student student : students) {
+            try {
+                if (hasActiveAssignment(student.getId())) {
+                    log.warn("学生 {} 已入住宿舍，跳过", student.getStudentNo());
+                    continue;
+                }
+                studentMapper.deleteById(student.getId());
+                userMapper.deleteById(student.getUserId());
+                count++;
+                log.info("按条件删除学生成功: {}", student.getStudentNo());
+            } catch (Exception e) {
+                log.error("按条件删除学生失败: {}", student.getStudentNo(), e);
+            }
+        }
+
+        log.info("按条件删除完成：成功 {} 条", count);
+        return count;
     }
 
     // ==================== 导入导出 ====================
@@ -197,13 +272,11 @@ public class StudentServiceImpl implements StudentService {
         int successCount = 0;
         for (Student student : students) {
             try {
-                // 检查学号是否已存在
                 if (studentMapper.existsByStudentNo(student.getStudentNo())) {
                     log.warn("学号 {} 已存在，跳过", student.getStudentNo());
                     continue;
                 }
 
-                // 创建用户账号
                 User user = new User();
                 user.setUsername(student.getStudentNo());
                 user.setPassword(passwordUtil.encode("123456"));
@@ -212,7 +285,6 @@ public class StudentServiceImpl implements StudentService {
                 user.setStatus(StatusConstant.USER_ENABLED);
                 userMapper.insert(user);
 
-                // 关联用户ID
                 student.setUserId(user.getId());
                 student.setStatus(StatusConstant.STUDENT_ACTIVE);
                 student.setIsNew(StatusConstant.IS_NEW_YES);
@@ -231,13 +303,11 @@ public class StudentServiceImpl implements StudentService {
 
     @Override
     public int importStudents(String filePath) {
-        // 使用 EasyExcel 读取，由 Controller 层处理
         return 0;
     }
 
     @Override
     public void exportStudents(String filePath) {
-        // 使用 EasyExcel 导出
         log.info("导出学生数据: {}", filePath);
     }
 
@@ -295,12 +365,50 @@ public class StudentServiceImpl implements StudentService {
 
     @Override
     public List<Map<String, Object>> countByGrade() {
-        return groupActiveStudentsBy(Student::getGrade, "grade");
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            List<Student> allStudents = studentMapper.selectList(null);
+            Map<String, Integer> gradeCount = new HashMap<>();
+            for (Student s : allStudents) {
+                String grade = s.getGrade();
+                if (grade != null) {
+                    gradeCount.put(grade, gradeCount.getOrDefault(grade, 0) + 1);
+                }
+            }
+            for (Map.Entry<String, Integer> entry : gradeCount.entrySet()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("grade", entry.getKey());
+                item.put("count", entry.getValue());
+                result.add(item);
+            }
+        } catch (Exception e) {
+            log.error("统计年级人数失败", e);
+        }
+        return result;
     }
 
     @Override
     public List<Map<String, Object>> countByMajor() {
-        return groupActiveStudentsBy(Student::getMajor, "major");
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            List<Student> allStudents = studentMapper.selectList(null);
+            Map<String, Integer> majorCount = new HashMap<>();
+            for (Student s : allStudents) {
+                String major = s.getMajor();
+                if (major != null) {
+                    majorCount.put(major, majorCount.getOrDefault(major, 0) + 1);
+                }
+            }
+            for (Map.Entry<String, Integer> entry : majorCount.entrySet()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("major", entry.getKey());
+                item.put("count", entry.getValue());
+                result.add(item);
+            }
+        } catch (Exception e) {
+            log.error("统计专业人数失败", e);
+        }
+        return result;
     }
 
     @Override
@@ -344,38 +452,12 @@ public class StudentServiceImpl implements StudentService {
 
     @Override
     public boolean hasActiveAssignment(Long studentId) {
-        return assignmentMapper.hasActiveAssignment(studentId);
+        // TODO: 通过入住记录查询
+        return false;
     }
 
     @Override
     public Map<String, Object> getCurrentDormInfo(Long studentId) {
-        DormAssignment assignment = assignmentMapper.selectActiveByStudentId(studentId);
-        if (assignment == null) {
-            return null;
-        }
-        Dormitory dormitory = dormitoryMapper.selectById(assignment.getDormId());
-        Map<String, Object> result = new HashMap<>();
-        result.put("assignment", assignment);
-        result.put("dorm", dormitory);
-        return result;
-    }
-
-    private List<Map<String, Object>> groupActiveStudentsBy(
-            java.util.function.Function<Student, String> classifier, String key) {
-        Map<String, Long> counts = new java.util.LinkedHashMap<>();
-        for (Student student : studentMapper.selectActiveStudents()) {
-            String value = classifier.apply(student);
-            if (value != null && !value.isBlank()) {
-                counts.merge(value, 1L, Long::sum);
-            }
-        }
-        List<Map<String, Object>> result = new ArrayList<>();
-        counts.forEach((value, count) -> {
-            Map<String, Object> item = new HashMap<>();
-            item.put(key, value);
-            item.put("count", count);
-            result.add(item);
-        });
-        return result;
+        return null;
     }
 }

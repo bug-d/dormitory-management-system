@@ -28,7 +28,15 @@
           <el-button type="primary" @click="handleSearch">搜索</el-button>
           <el-button @click="resetSearch">重置</el-button>
         </el-form-item>
+
         <el-form-item style="float: right;">
+          <el-button 
+            type="danger" 
+            :disabled="selectedIds.size === 0"
+            @click="handleBatchDelete"
+          >
+            批量删除（{{ selectedIds.size }}）
+          </el-button>
           <el-button type="primary" @click="handleAdd">新增用户</el-button>
         </el-form-item>
       </el-form>
@@ -41,20 +49,57 @@
         :data="tableData"
         border
         stripe
-        style="width: 100%"
-        :default-sort="{ prop: 'id', order: 'ascending' }"
+        style="width: 100%; overflow-x: auto;"
+        @sort-change="handleSortChange"
+        :max-height="500"
+        ref="tableRef"
+        @select="handleSelect"
+        @select-all="handleSelectAll"
+        row-key="id"
       >
-        <el-table-column prop="id" label="ID" width="80" align="center" sortable />
-        <el-table-column prop="username" label="用户名" min-width="120" />
-        <el-table-column prop="realName" label="姓名" min-width="100" />
-        <el-table-column prop="role" label="角色" min-width="120" align="center">
+        <el-table-column type="selection" width="55" align="center" fixed="left" />
+
+        <el-table-column label="序号" width="70" align="center" fixed="left">
+          <template #default="{ $index }">
+            {{ (pageNum - 1) * pageSize + $index + 1 }}
+          </template>
+        </el-table-column>
+
+        <el-table-column 
+          prop="username" 
+          label="用户名" 
+          min-width="120" 
+          sortable="custom"
+        />
+        <el-table-column 
+          prop="realName" 
+          label="姓名" 
+          min-width="100" 
+          sortable="custom"
+        />
+        <el-table-column 
+          prop="role" 
+          label="角色" 
+          min-width="120" 
+          align="center" 
+          sortable="custom"
+        >
           <template #default="{ row }">
             <el-tag :type="getRoleType(row.role)">
               {{ getRoleLabel(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="email" label="邮箱" min-width="160" />
+
+        <el-table-column label="保护" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.protected ? 'danger' : 'info'" size="small">
+              {{ row.protected ? '已锁定' : '正常' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="email" label="邮箱" min-width="180" />
         <el-table-column prop="phone" label="手机号" min-width="130" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -64,22 +109,38 @@
           </template>
         </el-table-column>
         <el-table-column prop="lastLoginTime" label="最后登录" min-width="170" />
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+
+        <el-table-column label="操作" width="380" fixed="right" align="center">
           <template #default="{ row }">
             <el-button size="small" type="primary" @click="handleEdit(row)">编辑</el-button>
+            <el-button 
+              size="small" 
+              :type="row.protected ? 'success' : 'warning'"
+              @click="toggleProtect(row)"
+            >
+              {{ row.protected ? '解锁' : '锁定' }}
+            </el-button>
+            <el-button size="small" type="warning" @click="handleResetPassword(row)">重置密码</el-button>
             <el-button
               size="small"
               :type="row.status === 1 ? 'warning' : 'success'"
               @click="toggleStatus(row)"
+              :disabled="row.protected && row.status === 1"
             >
               {{ row.status === 1 ? '禁用' : '启用' }}
             </el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button 
+              size="small" 
+              type="danger" 
+              @click="handleDelete(row)"
+              :disabled="row.protected"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <!-- ===== 分页 ===== -->
       <div class="pagination">
         <el-pagination
           v-model:current-page="pageNum"
@@ -94,18 +155,8 @@
     </el-card>
 
     <!-- ===== 新增/编辑弹窗 ===== -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="560px"
-      destroy-on-close
-    >
-      <el-form
-        ref="formRef"
-        :model="formData"
-        :rules="formRules"
-        label-width="100px"
-      >
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="600px" destroy-on-close>
+      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px">
         <el-form-item label="用户名" prop="username">
           <el-input v-model="formData.username" placeholder="请输入用户名" />
         </el-form-item>
@@ -137,10 +188,35 @@
             inactive-text="禁用"
           />
         </el-form-item>
+        <el-form-item label="保护锁定">
+          <el-switch
+            v-model="formData.protected"
+            :active-value="true"
+            :inactive-value="false"
+            active-text="已锁定"
+            inactive-text="正常"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitLoading" @click="handleSubmit">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ===== 重置密码弹窗 ===== -->
+    <el-dialog v-model="resetPwdVisible" title="重置密码" width="420px">
+      <el-form :model="resetPwdForm" label-width="100px">
+        <el-form-item label="用户名">
+          <span>{{ resetPwdForm.username }}</span>
+        </el-form-item>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="resetPwdForm.newPassword" type="password" placeholder="请输入新密码" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetPwdVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetPwdLoading" @click="confirmResetPassword">确认重置</el-button>
       </template>
     </el-dialog>
   </div>
@@ -149,15 +225,25 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getUsers, addUser, updateUser, deleteUser, enableUser, disableUser } from '@/api/user'
+import { getUsers, addUser, updateUser, deleteUser, enableUser, disableUser, resetPassword } from '@/api/user'
 
 // ============ 状态 ============
 const loading = ref(false)
 const submitLoading = ref(false)
+const resetPwdLoading = ref(false)
 const tableData = ref([])
 const total = ref(0)
 const pageNum = ref(1)
 const pageSize = ref(10)
+
+// ============ 跨页选择 ============
+const selectedIds = ref(new Set())
+
+// ============ 排序状态 ============
+const sortOrder = ref({
+  orderBy: 'id',
+  orderDir: 'asc'
+})
 
 // ============ 搜索条件 ============
 const searchForm = reactive({
@@ -171,7 +257,13 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('新增用户')
 const isEdit = ref(false)
 
-// ============ 表单 ============
+const resetPwdVisible = ref(false)
+const resetPwdForm = reactive({
+  userId: null,
+  username: '',
+  newPassword: ''
+})
+
 const formRef = ref(null)
 const formData = reactive({
   id: null,
@@ -181,10 +273,10 @@ const formData = reactive({
   email: '',
   phone: '',
   password: '',
-  status: 1
+  status: 1,
+  protected: false
 })
 
-// ============ 表单校验规则 ============
 const formRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -202,7 +294,8 @@ const formRules = {
   ]
 }
 
-// ============ 角色映射 ============
+const tableRef = ref(null)
+
 const getRoleLabel = (role) => {
   const map = { admin: '系统管理员', manager: '宿舍管理员', student: '学生' }
   return map[role] || role
@@ -211,6 +304,89 @@ const getRoleLabel = (role) => {
 const getRoleType = (role) => {
   const map = { admin: 'danger', manager: 'warning', student: 'success' }
   return map[role] || 'info'
+}
+
+// ============ 选择事件 ============
+const handleSelect = (selection, row) => {
+  if (selection.includes(row)) {
+    selectedIds.value.add(row.id)
+  } else {
+    selectedIds.value.delete(row.id)
+  }
+}
+
+const handleSelectAll = (selection) => {
+  const currentPageIds = tableData.value.map(row => row.id)
+  if (selection.length === tableData.value.length) {
+    currentPageIds.forEach(id => selectedIds.value.add(id))
+  } else {
+    currentPageIds.forEach(id => selectedIds.value.delete(id))
+  }
+}
+
+// ============ 锁定/解锁 ============
+const toggleProtect = (row) => {
+  const action = row.protected ? '解锁' : '锁定'
+  ElMessageBox.confirm(
+    `确认${action}用户 "${row.username}" 吗？\n${row.protected ? '解锁后该用户可以被删除' : '锁定后该用户将不能被删除'}`,
+    '提示',
+    {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(() => {
+    row.protected = !row.protected
+    ElMessage.success(`${action}成功`)
+  }).catch(() => {})
+}
+
+// ============ 批量删除 ============
+const handleBatchDelete = () => {
+  if (selectedIds.value.size === 0) {
+    ElMessage.warning('请先选择要删除的用户')
+    return
+  }
+
+  const ids = Array.from(selectedIds.value)
+  
+  ElMessageBox.confirm(
+    `确认删除选中的 ${ids.length} 名用户吗？\n\n（注意：选中跨页数据共 ${ids.length} 条）`,
+    '批量删除确认',
+    {
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    try {
+      for (const id of ids) {
+        await deleteUser(id)
+      }
+      ElMessage.success(`成功删除 ${ids.length} 条数据`)
+      selectedIds.value.clear()
+      loadData()
+    } catch (error) {
+      ElMessage.error(error.message || '批量删除失败')
+    }
+  }).catch(() => {})
+}
+
+// ============ 排序变化 ============
+const handleSortChange = ({ prop, order }) => {
+  if (order === 'ascending') {
+    sortOrder.value.orderBy = prop
+    sortOrder.value.orderDir = 'asc'
+  } else if (order === 'descending') {
+    sortOrder.value.orderBy = prop
+    sortOrder.value.orderDir = 'desc'
+  } else {
+    sortOrder.value.orderBy = 'id'
+    sortOrder.value.orderDir = 'asc'
+  }
+  pageNum.value = 1
+  selectedIds.value.clear()
+  loadData()
 }
 
 // ============ 加载数据 ============
@@ -222,12 +398,14 @@ const loadData = async () => {
       pageSize: pageSize.value,
       keyword: searchForm.keyword,
       role: searchForm.role,
-      status: searchForm.status
+      status: searchForm.status,
+      orderBy: sortOrder.value.orderBy,
+      orderDir: sortOrder.value.orderDir
     })
-    // 按 ID 升序排列（后端未排序时前端兜底）
-    const records = res.data?.records || []
-    records.sort((a, b) => a.id - b.id)
-    tableData.value = records
+    tableData.value = (res.data?.records || []).map(item => ({
+      ...item,
+      protected: item.protected || false
+    }))
     total.value = res.data?.total || 0
   } catch (error) {
     ElMessage.error('加载数据失败')
@@ -239,6 +417,7 @@ const loadData = async () => {
 // ============ 搜索 ============
 const handleSearch = () => {
   pageNum.value = 1
+  selectedIds.value.clear()
   loadData()
 }
 
@@ -246,7 +425,11 @@ const resetSearch = () => {
   searchForm.keyword = ''
   searchForm.role = ''
   searchForm.status = undefined
-  handleSearch()
+  sortOrder.value.orderBy = 'id'
+  sortOrder.value.orderDir = 'asc'
+  selectedIds.value.clear()
+  pageNum.value = 1
+  loadData()
 }
 
 // ============ 新增 ============
@@ -257,7 +440,6 @@ const handleAdd = () => {
   dialogVisible.value = true
 }
 
-// ============ 编辑 ============
 const handleEdit = (row) => {
   isEdit.value = true
   dialogTitle.value = '编辑用户'
@@ -266,14 +448,18 @@ const handleEdit = (row) => {
   dialogVisible.value = true
 }
 
-// ============ 删除 ============
 const handleDelete = (row) => {
+  if (row.protected) {
+    ElMessage.warning('该用户已被锁定，无法删除')
+    return
+  }
   ElMessageBox.confirm(`确认删除用户 "${row.username}" 吗？`, '提示', {
     type: 'warning'
   }).then(async () => {
     try {
       await deleteUser(row.id)
       ElMessage.success('删除成功')
+      selectedIds.value.delete(row.id)
       loadData()
     } catch (error) {
       ElMessage.error(error.message || '删除失败')
@@ -281,8 +467,11 @@ const handleDelete = (row) => {
   }).catch(() => {})
 }
 
-// ============ 切换状态 ============
 const toggleStatus = (row) => {
+  if (row.protected && row.status === 1) {
+    ElMessage.warning('该用户已被锁定，无法禁用')
+    return
+  }
   const action = row.status === 1 ? '禁用' : '启用'
   ElMessageBox.confirm(`确认${action}用户 "${row.username}" 吗？`, '提示', {
     type: 'warning'
@@ -302,7 +491,6 @@ const toggleStatus = (row) => {
   }).catch(() => {})
 }
 
-// ============ 提交表单 ============
 const handleSubmit = async () => {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
@@ -325,7 +513,6 @@ const handleSubmit = async () => {
   }
 }
 
-// ============ 重置表单 ============
 const resetForm = () => {
   formData.id = null
   formData.username = ''
@@ -335,10 +522,48 @@ const resetForm = () => {
   formData.phone = ''
   formData.password = ''
   formData.status = 1
+  formData.protected = false
   formRef.value?.clearValidate()
 }
 
-// ============ 初始化 ============
+// ============ 重置密码 ============
+const handleResetPassword = (row) => {
+  ElMessageBox.confirm(
+    `确认重置用户 "${row.username}" 的密码吗？\n\n重置后密码将恢复为默认密码（123456）`,
+    '重置密码确认',
+    {
+      confirmButtonText: '确认重置',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    try {
+      const res = await resetPassword(row.id)
+      ElMessage.success(`密码已重置为默认密码：${res.data}`)
+      loadData()
+    } catch (error) {
+      ElMessage.error(error.message || '重置失败')
+    }
+  }).catch(() => {})
+}
+
+const confirmResetPassword = async () => {
+  if (!resetPwdForm.newPassword || resetPwdForm.newPassword.length < 6) {
+    ElMessage.warning('新密码长度不少于 6 位')
+    return
+  }
+  resetPwdLoading.value = true
+  try {
+    await resetPassword(resetPwdForm.userId)
+    ElMessage.success('密码重置成功')
+    resetPwdVisible.value = false
+  } catch (error) {
+    ElMessage.error('重置失败')
+  } finally {
+    resetPwdLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadData()
 })
@@ -348,15 +573,12 @@ onMounted(() => {
 .user-manage {
   padding: 4px 0;
 }
-
 .search-card {
   margin-bottom: 20px;
 }
-
 .table-card {
   border-radius: 8px;
 }
-
 .pagination {
   margin-top: 20px;
   display: flex;
